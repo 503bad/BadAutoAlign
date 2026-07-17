@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <title>BadAutoAlign</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>BadAutoAlign</h1>
+    <div class="controls">
+      <button id="btn-timing" disabled>タイミング補正</button>
+      <button id="btn-pitch" disabled>ピッチ補正</button>
+      <button id="btn-both" disabled>両方</button>
+      <label class="opt">
+        pitch strength
+        <input id="opt-strength" type="number" min="0" max="1" step="0.05" value="0.85" />
+      </label>
+      <label class="opt">
+        max shift(ms)
+        <input id="opt-maxshift" type="number" min="0" max="500" step="10" value="120" />
+      </label>
+      <label class="opt">
+        スクラブ(ms)
+        <input id="opt-scrub" type="number" min="40" max="200" step="10" value="80" />
+      </label>
+      <button id="btn-recorrect" disabled>再補正</button>
+      <button id="btn-save" disabled>保存</button>
+      <button id="btn-play" disabled>▶ 再生</button>
+      <button id="btn-close-all" disabled>全て閉じる</button>
+      <span id="status">バックエンド接続待ち…</span>
+    </div>
+  </header>
+
+  <main id="lanes">
+    <section class="lane" data-track="guide">
+      <div class="lane-side">
+        <div class="lane-name"><span>ガイドボーカル</span><button class="lane-close" title="このトラックを閉じる" hidden>✕</button></div>
+        <div class="lane-ctrl">
+          <div class="knob" title="音量（上下ドラッグ / ダブルクリックでリセット）"></div>
+          <button class="lane-mute" title="ミュート">M</button>
+        </div>
+        <div class="lane-file"></div>
+      </div>
+      <div class="lane-main">
+        <div class="lane-body"><canvas></canvas><div class="drop-hint">WAVをドロップ</div></div>
+        <div class="lane-time"><canvas></canvas></div>
+      </div>
+    </section>
+
+    <div id="connector-wrap"><svg id="connector"></svg></div>
+
+    <section class="lane" data-track="vocal">
+      <div class="lane-side">
+        <div class="lane-name"><span>補正対象ボーカル</span><button class="lane-close" title="このトラックを閉じる" hidden>✕</button></div>
+        <div class="lane-ctrl">
+          <div class="knob" title="音量（上下ドラッグ / ダブルクリックでリセット）"></div>
+          <button class="lane-mute" title="ミュート">M</button>
+        </div>
+        <div class="lane-file"></div>
+      </div>
+      <div class="lane-main">
+        <div class="lane-body"><canvas></canvas><div class="drop-hint">WAVをドロップ</div></div>
+        <div class="lane-time"><canvas></canvas></div>
+      </div>
+    </section>
+
+    <section class="lane" data-track="corrected">
+      <div class="lane-side">
+        <div class="lane-name"><span>補正結果</span><button class="lane-close" title="このトラックを閉じる" hidden>✕</button></div>
+        <div class="lane-ctrl">
+          <div class="knob" title="音量（上下ドラッグ / ダブルクリックでリセット）"></div>
+          <button class="lane-mute" title="ミュート">M</button>
+        </div>
+        <div class="lane-file"></div>
+      </div>
+      <div class="lane-main">
+        <div class="lane-body"><canvas></canvas><div class="drop-hint">補正実行後に表示</div></div>
+        <div class="lane-time"><canvas></canvas></div>
+      </div>
+    </section>
+
+    <section class="lane" data-track="inst">
+      <div class="lane-side">
+        <div class="lane-name"><span>オケ（任意）</span><button class="lane-close" title="このトラックを閉じる" hidden>✕</button></div>
+        <div class="lane-ctrl">
+          <div class="knob" title="音量（上下ドラッグ / ダブルクリックでリセット）"></div>
+          <button class="lane-mute" title="ミュート">M</button>
+        </div>
+        <div class="lane-file"></div>
+      </div>
+      <div class="lane-main">
+        <div class="lane-body"><canvas></canvas><div class="drop-hint">WAVをドロップ</div></div>
+        <div class="lane-time"><canvas></canvas></div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span class="legend">
+      <i class="dot quiet"></i>合っている（何もしなくてOK）
+      <i class="dot warn"></i>まだズレあり（ドラッグで合わせて「再補正」）
+      <i class="dot skip"></i>自動では判断不能（聴いて確認）
+      <i class="dot man"></i>手動アンカー
+    </span>
+  </footer>
+
+  <div id="progress-overlay">
+    <div class="progress-card">
+      <div class="progress-label">補正処理中…</div>
+      <div class="progress-track"><div class="progress-fill"></div></div>
+      <div class="progress-detail">解析中…</div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

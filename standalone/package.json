@@ -1,0 +1,18 @@
+{
+  "name": "bad-auto-align",
+  "productName": "BadAutoAlign",
+  "version": "0.2.0",
+  "description": "MIDI/WAVガイドによるボーカルのタイミング・ピッチ一括補正（スタンドアローン版）",
+  "author": {
+    "name": "Igarashi Date"
+  },
+  "company": "503 bad gateway",
+  "main": "main.js",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^33.2.0"
+  }
+}

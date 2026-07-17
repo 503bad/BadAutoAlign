@@ -1,0 +1,211 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #16181d;
+  --panel: #1f2229;
+  --panel2: #262a33;
+  --text: #d7dae0;
+  --dim: #8a8f9a;
+  --accent: #5aa9e6;
+  --ok: #57c785;
+  --warn: #e6b455;
+  --skip: #e66a6a;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Hiragino Sans", "Yu Gothic UI", sans-serif;
+  font-size: 13px;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  user-select: none;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 14px;
+  background: var(--panel);
+  border-bottom: 1px solid #000;
+}
+header h1 { font-size: 15px; font-weight: 600; margin-right: 8px; }
+
+.controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+button {
+  background: var(--panel2);
+  color: var(--text);
+  border: 1px solid #3a3f4b;
+  border-radius: 5px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: 0.4; cursor: default; }
+.opt { color: var(--dim); display: flex; align-items: center; gap: 4px; }
+.opt input { width: 64px; background: var(--panel2); color: var(--text);
+             border: 1px solid #3a3f4b; border-radius: 4px; padding: 3px 6px; }
+#status { color: var(--dim); margin-left: 8px; }
+
+main {
+  flex: 1; overflow-y: auto; padding: 10px 14px; position: relative;
+  display: flex; flex-direction: column;
+}
+
+/* レーン: 左サイドパネル + 波形ボディの横並び。
+   4レーンでビューポート高さを等分し、狭すぎる場合はスクロール */
+.lane {
+  display: flex;
+  flex: 1 1 0;
+  min-height: 96px;
+  background: var(--panel);
+  border-radius: 6px;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+.lane:last-child { margin-bottom: 0; }
+.lane-side {
+  width: 148px;
+  flex: none;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-right: 1px solid #000;
+}
+.lane-name {
+  font-weight: 600; font-size: 12px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.lane-close {
+  width: 18px; height: 18px; padding: 0;
+  font-size: 10px; line-height: 1;
+  color: var(--dim); border-radius: 3px;
+}
+.lane-close:hover { color: var(--skip); border-color: var(--skip); }
+.lane-ctrl { display: flex; align-items: center; gap: 10px; flex: 1; }
+.lane-file {
+  font-size: 10px; color: var(--dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  direction: rtl; text-align: left;  /* パス末尾（ファイル名）を優先表示 */
+}
+
+/* ミュートボタン（トグル） */
+.lane-mute {
+  width: 26px; height: 26px; padding: 0;
+  border-radius: 4px; font-weight: 700; color: var(--dim);
+}
+.lane-mute.active { background: var(--warn); color: #1a1a1a; border-color: var(--warn); }
+
+/* ロータリーノブ */
+.knob { width: 44px; height: 52px; cursor: ns-resize; flex: none; }
+.knob svg { display: block; }
+.knob text { fill: var(--dim); font-size: 9px; font-family: inherit; }
+
+.lane-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.lane-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: var(--panel2);
+}
+/* タイムスタンプルーラー（表示範囲を8分割） */
+.lane-time {
+  height: 16px;
+  flex: none;
+  background: var(--panel);
+  border-top: 1px solid #000;
+}
+.lane-time canvas { width: 100%; height: 100%; display: block; }
+.lane-body canvas { width: 100%; height: 100%; display: block; }
+.lane-body .drop-hint {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  color: var(--dim); pointer-events: none;
+}
+.lane-body.has-audio .drop-hint { display: none; }
+.lane-body.drag-over { outline: 2px dashed var(--accent); outline-offset: -2px; }
+
+#connector-wrap { position: relative; height: 0; }
+#connector {
+  position: absolute; left: 0; right: 0; top: -8px; height: 0;
+  overflow: visible; pointer-events: none; width: 100%;
+}
+
+footer {
+  padding: 6px 14px; background: var(--panel); border-top: 1px solid #000;
+  color: var(--dim);
+}
+.legend .dot {
+  display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+  margin: 0 4px 0 10px;
+}
+.dot.ok { background: var(--ok); }
+.dot.warn { background: var(--warn); }
+.dot.skip { background: var(--skip); }
+
+.dot.quiet { background: #969ba5; }
+.dot.man { background: var(--accent); }
+
+#tooltip {
+  position: fixed;
+  display: none;
+  z-index: 10;
+  background: #0c0e12;
+  border: 1px solid #3a3f4b;
+  border-radius: 5px;
+  padding: 5px 9px;
+  font-size: 12px;
+  color: var(--text);
+  pointer-events: none;
+  max-width: 340px;
+}
+
+#progress-overlay {
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 12, 16, 0.65);
+  z-index: 100;
+}
+#progress-overlay.show { display: flex; }
+.progress-card {
+  background: var(--panel);
+  border: 1px solid #3a3f4b;
+  border-radius: 8px;
+  padding: 22px 28px;
+  width: 380px;
+  text-align: center;
+}
+.progress-label { font-size: 14px; font-weight: 600; margin-bottom: 14px; }
+.progress-track {
+  height: 8px;
+  background: var(--panel2);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  border-radius: 4px;
+  transition: width 0.25s ease;
+}
+/* 総数が分かるまでの不確定アニメーション */
+.progress-track.indeterminate .progress-fill {
+  width: 30%;
+  animation: indet 1.1s ease-in-out infinite alternate;
+}
+@keyframes indet {
+  from { margin-left: 0; }
+  to { margin-left: 70%; }
+}
+.progress-detail { color: var(--dim); margin-top: 10px; font-size: 12px; }
