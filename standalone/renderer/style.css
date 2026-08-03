@@ -208,4 +208,7 @@ footer {
   from { margin-left: 0; }
   to { margin-left: 70%; }
 }
-.progress-detail { color: var(--dim); margin-top: 10px; font-size: 12px; }
+.progress-detail {
+  color: var(--dim); margin-top: 10px; font-size: 12px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}

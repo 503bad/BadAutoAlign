@@ -19,11 +19,33 @@ from __future__ import annotations
 import dataclasses
 import json
 import sys
+import threading
 import traceback
 from contextlib import redirect_stdout
 
 
+def _warmup() -> None:
+    """初回補正の待ち時間を減らすため、重い初期化を起動直後に裏で済ませる。
+
+    - librosa/scipy等の重量級import（vat.pipeline経由で連鎖）
+    - Signalsmith StretchラッパーのC++ビルド（ソース変更後の初回のみ）
+    """
+    try:
+        print("[warmup] エンジン初期化中…", file=sys.stderr, flush=True)
+        from . import native, pipeline  # noqa: F401
+
+        native.is_available()
+        print("[warmup] エンジン初期化完了", file=sys.stderr, flush=True)
+    except Exception as e:  # noqa: BLE001 — ウォームアップ失敗は本処理に影響させない
+        print(f"[warmup] 初期化スキップ: {e}", file=sys.stderr, flush=True)
+
+
 def serve() -> int:
+    # プロトコルはUTF-8固定（Windowsのcp932や同梱Python環境に依存しない）
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+    threading.Thread(target=_warmup, daemon=True).start()
     out = sys.stdout
     for line in sys.stdin:
         line = line.strip()

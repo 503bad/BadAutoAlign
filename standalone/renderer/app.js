@@ -479,11 +479,16 @@ function hideProgress() {
 }
 
 window.api.onProgress((p) => {
-  if (!p || !p.total) return;
-  $(".progress-track").classList.remove("indeterminate");
-  const pct = Math.min(100, Math.round((p.done / p.total) * 100));
-  $(".progress-fill").style.width = `${pct}%`;
-  $(".progress-detail").textContent = `フレーズ ${p.done} / ${p.total}`;
+  if (!p) return;
+  if (p.total) {
+    $(".progress-track").classList.remove("indeterminate");
+    const pct = Math.min(100, Math.round((p.done / p.total) * 100));
+    $(".progress-fill").style.width = `${pct}%`;
+    $(".progress-detail").textContent = `フレーズ ${p.done} / ${p.total}`;
+  } else if (p.log && $(".progress-track").classList.contains("indeterminate")) {
+    // フレーズ総数が判明する前はバックエンドのログをそのまま見せる
+    $(".progress-detail").textContent = p.log;
+  }
 });
 
 async function runProcess(mode) {
@@ -666,9 +671,11 @@ function scrubAt(timeS) {
   src.buffer = t.buffer;
   const g = audioCtx.createGain();
   const fade = 0.005;
+  const knob = knobs.vocal;
+  const vol = knob ? knob.value * knob.value : 1;  // 音量ノブを適用
   g.gain.setValueAtTime(0, now);
-  g.gain.linearRampToValueAtTime(1, now + fade);
-  g.gain.setValueAtTime(1, now + lenS - fade);
+  g.gain.linearRampToValueAtTime(vol, now + fade);
+  g.gain.setValueAtTime(vol, now + lenS - fade);
   g.gain.linearRampToValueAtTime(0, now + lenS);
   src.connect(g).connect(audioCtx.destination);
   src.start(now, Math.max(0, timeS - lenS / 2), lenS);
@@ -680,7 +687,7 @@ let holdPreview = null;    // {src, gain}
 let suppressNextClick = false;
 
 // 指定トラックをその位置から、押している間だけ再生する。
-// ミュート・音量ノブを無視して等倍で鳴らす（レーンのGainを通さない）
+// 音量ノブは適用する。ミュートは無視（押している＝聴きたい意思表示のため）
 function startHoldPreview(trackName, fromS) {
   stopHoldPreview();
   const t = tracks[trackName];
@@ -689,8 +696,10 @@ function startHoldPreview(trackName, fromS) {
   src.buffer = t.buffer;
   const g = audioCtx.createGain();
   const now = audioCtx.currentTime;
+  const knob = knobs[trackName];
+  const vol = knob ? knob.value * knob.value : 1;  // applyGainと同じカーブ
   g.gain.setValueAtTime(0, now);
-  g.gain.linearRampToValueAtTime(1, now + 0.005);
+  g.gain.linearRampToValueAtTime(vol, now + 0.005);
   src.connect(g).connect(audioCtx.destination);
   src.start(now, Math.max(0, fromS));
   holdPreview = { src, gain: g };

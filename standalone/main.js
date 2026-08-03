@@ -29,7 +29,10 @@ class VatBackend {
     const custom = process.env.VAT_SERVE_CMD;
     const [cmd, ...args] = custom
       ? custom.split(" ")
-      : ["uv", "--directory", REPO_ROOT, "run", "vat", "serve"];
+      : app.isPackaged
+        // 配布パッケージ: PyInstallerでexe化したバックエンドを同梱
+        ? [path.join(process.resourcesPath, "vat-serve", "vat-serve.exe")]
+        : ["uv", "--directory", REPO_ROOT, "run", "vat", "serve"];
     this.proc = spawn(cmd, args, {
       stdio: ["pipe", "pipe", "pipe"],
       // Windows(cp932等)でもJSON-RPCと日本語ログをUTF-8で受け取る
@@ -64,6 +67,9 @@ class VatBackend {
       } else if (/フレーズ .*:\s*timing=/.test(line) && this.progress) {
         this.progress.done += 1;
         this.progressSender.send("vat:progress", this.progress);
+      } else {
+        // フレーズ進捗が確定する前の待ち時間に「何をしているか」を見せる
+        this.progressSender.send("vat:progress", { log: line });
       }
     });
     this.proc.on("exit", (code) => {

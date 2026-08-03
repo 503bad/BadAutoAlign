@@ -9,15 +9,18 @@ from __future__ import annotations
 
 import ctypes
 import hashlib
+import os
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import numpy as np
 
 _HERE = Path(__file__).parent
 _LIB: ctypes.CDLL | None = None
+_BUILD_LOCK = threading.Lock()  # サービスのウォームアップと本処理の同時ビルド防止
 
 
 def _source_hash() -> str:
@@ -91,10 +94,39 @@ def _compile_commands(src: str, out: str) -> list[list[str] | str]:
     return [["c++", *gnu], ["g++", *gnu], ["clang++", *gnu]]
 
 
+def _bundled_lib() -> Path | None:
+    """プリビルトDLLがあればそれを使う（配布パッケージ用。ビルド不要）。
+
+    優先順: 環境変数 VAT_STRETCH_LIB → PyInstaller同梱（実行ファイルと同じ場所）
+    """
+    env = os.environ.get("VAT_STRETCH_LIB")
+    if env and Path(env).exists():
+        return Path(env)
+    if getattr(sys, "frozen", False):
+        p = Path(sys.executable).parent / f"vatstretch{_lib_suffix()}"
+        if p.exists():
+            return p
+    return None
+
+
+def _resolve_lib() -> Path:
+    bundled = _bundled_lib()
+    if bundled is not None:
+        return bundled
+    return _build()
+
+
 def _build() -> Path:
+    with _BUILD_LOCK:
+        return _build_locked()
+
+
+def _build_locked() -> Path:
     lib_path = _cache_dir() / f"vatstretch-{_source_hash()}{_lib_suffix()}"
     if lib_path.exists():
         return lib_path
+    print("Signalsmith Stretchラッパーをビルド中…（初回のみ、数十秒かかることがあります）",
+          file=sys.stderr, flush=True)
     src = str(_HERE / "wrapper.cpp")
     candidates = [c for c in _compile_commands(src, str(lib_path))
                   if isinstance(c, str) or shutil.which(c[0])]
@@ -122,9 +154,9 @@ def _build() -> Path:
 
 
 def is_available() -> bool:
-    """stretchエンジンが利用可能か（ビルド済み or その場でビルド成功）。"""
+    """stretchエンジンが利用可能か（同梱DLL or ビルド済み or その場でビルド成功）。"""
     try:
-        _build()
+        _resolve_lib()
         return True
     except RuntimeError:
         return False
@@ -134,7 +166,7 @@ def _load() -> ctypes.CDLL:
     global _LIB
     if _LIB is not None:
         return _LIB
-    lib = ctypes.CDLL(str(_build()))
+    lib = ctypes.CDLL(str(_resolve_lib()))
     lib.vs_create.restype = ctypes.c_void_p
     lib.vs_create.argtypes = [ctypes.c_float]
     lib.vs_destroy.argtypes = [ctypes.c_void_p]
