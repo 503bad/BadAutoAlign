@@ -78,8 +78,9 @@ def _msvc_vcvars_command(src: str, out: str) -> str | None:
 def _compile_commands(src: str, out: str) -> list[list[str] | str]:
     """利用可能なコンパイラごとのビルドコマンド候補（優先順）。"""
     if sys.platform == "win32":
+        # -static: MSYS2/MinGW の libwinpthread 等に依存しない自己完結DLLにする
         gnu = ["-std=c++17", "-O3", "-shared", src, "-o", out,
-               "-static-libgcc", "-static-libstdc++"]
+               "-static", "-static-libgcc", "-static-libstdc++"]
         cmds = [
             ["g++", *gnu],
             ["clang++", *gnu],
@@ -144,10 +145,18 @@ def _build_locked() -> Path:
             subprocess.run(cmd, check=True, capture_output=True, text=True,
                            encoding="utf-8", errors="replace",
                            cwd=str(_cache_dir()))
-            return lib_path
         except subprocess.CalledProcessError as e:
             # cl はエラーをstdoutに出す
             errors.append(f"[{label}] {e.stderr or e.stdout}")
+            continue
+        # ビルドできても実行時依存（MinGWランタイム等）が欠けて読めないことがある。
+        # その場合は成果物を捨てて次のコンパイラを試す
+        try:
+            ctypes.CDLL(str(lib_path))
+            return lib_path
+        except OSError as e:
+            errors.append(f"[{label}] ビルド後のロードに失敗: {e}")
+            lib_path.unlink(missing_ok=True)
     raise RuntimeError(
         "Signalsmith Stretchラッパーのビルドに失敗しました:\n" + "\n".join(errors)
     )
@@ -177,6 +186,7 @@ def _load() -> ctypes.CDLL:
     lib.vs_output_latency.argtypes = [ctypes.c_void_p]
     lib.vs_set_transpose_factor.argtypes = [ctypes.c_void_p, ctypes.c_float, ctypes.c_float]
     lib.vs_set_formant_factor.argtypes = [ctypes.c_void_p, ctypes.c_float, ctypes.c_int]
+    lib.vs_set_formant_base.argtypes = [ctypes.c_void_p, ctypes.c_float]
     fptr = ctypes.POINTER(ctypes.c_float)
     lib.vs_process.argtypes = [ctypes.c_void_p, fptr, ctypes.c_int, fptr, ctypes.c_int]
     lib.vs_flush.argtypes = [ctypes.c_void_p, fptr, ctypes.c_int]
@@ -205,8 +215,19 @@ class StretchStream:
         return self._lib.vs_output_latency(self._h)
 
     def set_transpose_factor(self, multiplier: float, tonality_limit: float = 0.0) -> None:
+        """tonality_limit はサンプルレート比（例: 8000/sr）。0で無効。"""
         self._lib.vs_set_transpose_factor(
             self._h, ctypes.c_float(multiplier), ctypes.c_float(tonality_limit))
+
+    def set_formant_factor(self, multiplier: float, compensate: bool = False) -> None:
+        """compensate=True でトランスポーズを打ち消す方向に包絡を補正
+        （multiplier=1.0 と併用でフォルマント保持シフト）。"""
+        self._lib.vs_set_formant_factor(
+            self._h, ctypes.c_float(multiplier), ctypes.c_int(1 if compensate else 0))
+
+    def set_formant_base(self, base_freq_hz: float) -> None:
+        """フォルマント包絡推定の基準F0（Hz）。0で自動推定。"""
+        self._lib.vs_set_formant_base(self._h, ctypes.c_float(base_freq_hz))
 
     def process(self, chunk: np.ndarray, out_samples: int) -> np.ndarray:
         x = np.ascontiguousarray(chunk, dtype=np.float32)

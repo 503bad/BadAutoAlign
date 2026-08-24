@@ -18,7 +18,7 @@ def _talk(requests: list[dict], timeout: float = 300.0) -> list[dict]:
     proc = subprocess.Popen(
         ["uv", "--directory", str(REPO), "run", "vat", "serve"],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",  # サービスはUTF-8固定（Windowsのcp932に依存しない）
     )
     stdin = "".join(json.dumps(r) + "\n" for r in requests)
     out, err = proc.communicate(stdin, timeout=timeout)

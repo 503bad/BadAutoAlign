@@ -24,6 +24,9 @@ class PitchTrack:
     f0: np.ndarray      # Hz。無声フレームは 0
     voiced: np.ndarray  # bool
     conf: np.ndarray    # 0〜1
+    # ゲート前の検出器出力（合成エンジンの周期解析用。補正判断には使わない）
+    f0_raw: np.ndarray | None = None
+    voiced_raw: np.ndarray | None = None
 
     @property
     def n_frames(self) -> int:
@@ -60,7 +63,10 @@ def _apply_gates(track: PitchTrack, audio: np.ndarray, sr: int, cfg: Config) -> 
     # ZCRが極端に高いフレームは無声摩擦音とみなす（歌声の有声域では通常 <0.3）
     voiced = track.voiced & (track.conf >= cfg.min_voiced_conf) & gate & (zcr < 0.35)
     f0 = np.where(voiced, track.f0, 0.0)
-    return PitchTrack(track.times, f0, voiced, track.conf)
+    f0_raw = track.f0_raw if track.f0_raw is not None else track.f0
+    voiced_raw = track.voiced_raw if track.voiced_raw is not None else track.voiced
+    return PitchTrack(track.times, f0, voiced, track.conf,
+                      f0_raw=f0_raw.copy(), voiced_raw=voiced_raw.copy())
 
 
 def detect_pitch(audio: np.ndarray, sr: int, cfg: Config) -> PitchTrack:
@@ -102,13 +108,15 @@ def _detect_pyin(audio: np.ndarray, sr: int, cfg: Config) -> PitchTrack:
         hop_length=cfg.hop,
         resolution=cfg.pyin_resolution,
         center=True,
+        fill_na=None,  # 無声判定フレームにも最尤F0を残す（合成エンジンの周期解析用）
     )
     grid = _grid_times(len(audio), sr, cfg.hop)
     n = min(len(grid), len(f0))
-    f0 = np.nan_to_num(f0[:n], nan=0.0)
+    f0_raw = np.nan_to_num(f0[:n], nan=0.0)
     conf = np.nan_to_num(voiced_prob[:n], nan=0.0)
-    voiced = voiced_flag[:n].astype(bool) & (f0 > 0)
-    return PitchTrack(grid[:n], f0, voiced, conf)
+    voiced = voiced_flag[:n].astype(bool) & (f0_raw > 0)
+    f0 = np.where(voiced, f0_raw, 0.0)
+    return PitchTrack(grid[:n], f0, voiced, conf, f0_raw=f0_raw, voiced_raw=voiced)
 
 
 # ---------------------------------------------------------------- torchcrepe
@@ -134,7 +142,8 @@ def _detect_crepe(audio: np.ndarray, sr: int, cfg: Config) -> PitchTrack:
     grid = _grid_times(len(audio), sr, cfg.hop)
     f0g, confg = _regrid(times, f0, conf, grid)
     voiced = confg >= cfg.min_voiced_conf
-    return PitchTrack(grid, np.where(voiced, f0g, 0.0), voiced, confg)
+    return PitchTrack(grid, np.where(voiced, f0g, 0.0), voiced, confg,
+                      f0_raw=f0g, voiced_raw=voiced)
 
 
 # ---------------------------------------------------------------- RMVPE (ONNX)
@@ -162,7 +171,8 @@ def _detect_rmvpe(audio: np.ndarray, sr: int, cfg: Config) -> PitchTrack:
     grid = _grid_times(len(audio), sr, cfg.hop)
     f0g, confg = _regrid(times, f0, conf, grid)
     voiced = (confg >= max(cfg.min_voiced_conf * 0.06, 0.03)) & (f0g > 0)
-    return PitchTrack(grid, np.where(voiced, f0g, 0.0), voiced, np.clip(confg / 0.1, 0, 1))
+    return PitchTrack(grid, np.where(voiced, f0g, 0.0), voiced, np.clip(confg / 0.1, 0, 1),
+                      f0_raw=f0g, voiced_raw=voiced)
 
 
 def _rmvpe_mel(x: np.ndarray) -> np.ndarray:

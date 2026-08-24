@@ -16,7 +16,7 @@ from .engines import get_engine
 from .guide import GuideData, load_guide
 from .pitch import NoteReport, build_correction_curve
 from .segment import PhrasePair, match_phrases, split_audio_phrases, split_note_phrases
-from .timing import build_warp_map
+from .timing import build_warp_map, warp_frame_index, warp_track
 
 
 def process_file(input_wav: str, guide_path: str, output_wav: str | None,
@@ -107,8 +107,10 @@ def _process_phrase(output: np.ndarray, sr: int, pair: PhrasePair, engine,
     }
 
     track = detect_pitch(seg, sr, cfg)
+    src_track = track  # ワープ前タイムラインの検出結果（1パスエンジンの周期解析用）
 
     # --- タイミング補正（T2） ---
+    warp = None
     if not cfg.pitch_only and cfg.timing_strength > 0:
         guide_ctx = _make_guide_ctx(seg, sr, pair, guide, cfg)
         warp, align_table, base_ms, lag_profile = build_warp_map(
@@ -117,28 +119,50 @@ def _process_phrase(output: np.ndarray, sr: int, pair: PhrasePair, engine,
         log["alignment"] = [e.to_dict() for e in align_table]
         log["base_shift_ms"] = round(base_ms, 1)
         log["lag_profile"] = lag_profile
-        if not warp.is_identity(eps=0.002):
+        if warp.is_identity(eps=0.002):
+            warp = None
+            for r in reports:
+                r.timing_applied = False
+        elif engine.single_pass:
+            # 1パス統合: ワープはまだ適用せず、ワープ後時間軸の検出結果を
+            # 写像で得る（PSOLAはF0を保存するため再検出と等価）
+            track = warp_track(track, warp)
+            log["timing_applied"] = True
+        else:
             seg = engine.time_warp(seg, sr, warp)
             log["timing_applied"] = True
             track = detect_pitch(seg, sr, cfg)  # T3: ワープ後に再検出
-        else:
-            for r in reports:
-                r.timing_applied = False
+            warp = None
 
     # --- ピッチ補正（P2/P3） ---
+    curve = None
     if not cfg.timing_only and cfg.pitch_strength > 0:
         guide_curve = None
         if guide.source == "wav" and cfg.pitch_target == "curve":
             guide_curve = (guide.f0_times, guide.f0_midi)
+        voiced_mask = None
+        if engine.single_pass and hasattr(engine, "synthesis_voicing"):
+            # 合成エンジンの周期性ベース有声判定をマスクに使う（音符内で連続）
+            voiced_mask = engine.synthesis_voicing(seg, sr, src_track)
+            if warp is not None:
+                voiced_mask = voiced_mask[warp_frame_index(src_track, warp)]
         curve = build_correction_curve(track, pair.notes, ph.start, cfg,
-                                       reports, guide_curve=guide_curve)
+                                       reports, guide_curve=guide_curve,
+                                       voiced_mask=voiced_mask)
         if np.max(np.abs(curve)) * 100.0 >= cfg.min_correction_cents:
-            seg = engine.pitch_shift(seg, sr, track, curve)
             log["pitch_applied"] = True
         else:
+            curve = None
             for r in reports:
                 if not r.skip_reasons and r.applied_cents is not None:
                     r.skip_reasons.append("correction_below_threshold")
+
+    if engine.single_pass:
+        if warp is not None or curve is not None:
+            # ワープ後グリッドのカーブと、ワープ前の検出結果（周期解析用）を渡す
+            seg = engine.process(seg, sr, src_track, warp, curve)
+    elif curve is not None:
+        seg = engine.pitch_shift(seg, sr, track, curve)
 
     if log["timing_applied"] or log["pitch_applied"]:
         _splice(output, seg, ph.start_sample, sr)

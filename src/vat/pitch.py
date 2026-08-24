@@ -28,6 +28,7 @@ class NoteReport:
     detected_median_hz: float | None = None
     offset_cents_before: float | None = None
     applied_cents: float | None = None
+    conf_coverage: float | None = None   # ノート内で信頼できる検出フレームの割合（補正強度の重み）
     timing_shift_ms: float | None = None
     timing_applied: bool = False
     timing_applied_ms: float | None = None   # この位置で実際に適用された移動量
@@ -46,6 +47,7 @@ class NoteReport:
             "detected_median_hz": _r(self.detected_median_hz),
             "offset_cents_before": _r(self.offset_cents_before),
             "applied_cents": _r(self.applied_cents),
+            "conf_coverage": _r(self.conf_coverage),
             "timing_shift_ms": _r(self.timing_shift_ms),
             "timing_applied": self.timing_applied,
             "timing_applied_ms": _r(self.timing_applied_ms),
@@ -68,12 +70,17 @@ def build_correction_curve(
     cfg: Config,
     reports: list[NoteReport],
     guide_curve: tuple[np.ndarray, np.ndarray] | None = None,
+    voiced_mask: np.ndarray | None = None,
 ) -> np.ndarray:
     """フレーズ内の各フレームの補正量（半音）を返す。
 
     track はフレーズ切り出し音声に対する検出結果（時刻はフレーズ先頭基準）。
     notes / reports の時刻は絶対時刻。guide_curve=(times, midi) を渡すと
     curveモード（ガイドF0カーブ転写）になる。
+    voiced_mask: P2 の有声/無声マスクに使うフレームごとの bool。省略時は
+    検出器の有声＆信頼度ゲート。合成エンジンが周期性ベースの有声判定を
+    持つ場合はそれを渡す（ガナリ・かすれ声で検出器の信頼度が音符内で
+    上下しても、補正が途中で抜けて音程が波打つのを防ぐ）。
     """
     n = track.n_frames
     dt = float(track.times[1] - track.times[0]) if n > 1 else cfg.hop / 48000.0
@@ -82,7 +89,12 @@ def build_correction_curve(
 
     raw = np.zeros(n)
     note_mask = np.zeros(n)
+    voiced_any = usable if voiced_mask is None else (np.asarray(voiced_mask, dtype=bool)[:n] | usable)
+    legato_gap_frames = int(round(cfg.legato_gap_ms / 1000.0 / dt))
 
+    # 第1パス: ノートごとのオフセット（ガード込み）
+    items: list[tuple[int, int, NoteReport, np.ndarray | float, np.ndarray]] = []
+    skipped_starts: list[int] = []
     for rep, note in _iter_note_reports(notes, reports):
         s = int(round((note.start - phrase_start) / dt))
         e = int(round((note.end - phrase_start) / dt))
@@ -93,9 +105,18 @@ def build_correction_curve(
         seg_usable = usable[s:e]
         if not seg_usable.any():
             rep.skip_reasons.append("low_confidence")
+            skipped_starts.append(s)
             continue
         med = float(np.median(semis[s:e][seg_usable]))
         rep.detected_median_hz = 440.0 * 2 ** ((med - 69.0) / 12.0)
+        # 信頼度カバー率による強度重み: 信頼できるフレームが少ないノートの
+        # オフセット推定はノイズが大きい（ガナリ・かすれ・対応ずれ）ため、
+        # 補正を比例して弱める。音符内の連続性は保ったまま「迷ったら触らない」
+        coverage = float(seg_usable.mean())
+        rep.conf_coverage = coverage
+        conf_gain = 1.0
+        if cfg.conf_full_coverage > 0:
+            conf_gain = min(1.0, coverage / cfg.conf_full_coverage)
 
         if guide_curve is not None:
             # curveモード: ガイドF0カーブとの差分をフレームごとに転写
@@ -108,8 +129,9 @@ def build_correction_curve(
             rep.offset_cents_before = offset * 100.0
             if abs(offset) * 100.0 > cfg.max_correction_cents:
                 rep.skip_reasons.append("offset_exceeds_guard")
+                skipped_starts.append(s)
                 continue
-            raw[s:e] = np.where(seg_usable, offset_frames, 0.0) * _attack_ramp(e - s, dt, cfg)
+            target = np.where(seg_usable, offset_frames, 0.0) * conf_gain
         else:
             # noteモード: 中央値オフセットのみ補正（ビブラート等は保持）
             offset = note.pitch - med
@@ -119,11 +141,33 @@ def build_correction_curve(
                 cfg.warn(
                     f"ノート{rep.index}: オフセット{offset * 100:.0f}centがガードを超過、スキップ"
                 )
+                skipped_starts.append(s)
                 continue
-            raw[s:e] = offset * _attack_ramp(e - s, dt, cfg)
+            target = offset * conf_gain
+        items.append((s, e, rep, target, seg_usable))
 
+    # 第2パス: カーブの組み立て。ノート頭の attack_preserve_ms はランプイン
+    # （しゃくり保持）だが、直前ノートと有声のまま繋がるレガートでは 0 からでは
+    # なく直前ノート末尾の補正量から遷移させ、ノート境界ごとに補正が 0 へ
+    # 落ちて戻る音程の波打ちを防ぐ。ノート間の短い有声ギャップも補正を保持する。
+    prev_e, prev_val = None, 0.0
+    for s, e, rep, target, seg_usable in sorted(items, key=lambda it: it[0]):
+        legato = False
+        if prev_e is not None and legato_gap_frames > 0 and 0 <= s - prev_e <= legato_gap_frames:
+            gap = voiced_any[prev_e:s]
+            legato = len(gap) <= 1 or float(gap.mean()) >= 0.8
+            # 間にスキップされたノート（ガード超過・低信頼）があれば引き継がない
+            if any(prev_e <= ss < s for ss in skipped_starts):
+                legato = False
+        start_val = prev_val if legato else 0.0
+        if legato and s > prev_e:
+            raw[prev_e:s] = prev_val
+            note_mask[prev_e:s] = 1.0
+        ramp = _attack_ramp(e - s, dt, cfg)
+        raw[s:e] = start_val * (1.0 - ramp) + target * ramp
         note_mask[s:e] = 1.0
         rep.applied_cents = float(np.median(raw[s:e][seg_usable])) * 100.0 * cfg.pitch_strength
+        prev_e, prev_val = e, float(raw[e - 1])
 
     strength_curve = raw * cfg.pitch_strength
 
@@ -133,7 +177,8 @@ def build_correction_curve(
 
     # P2: 無声フレームはシフト比1.0で素通し。境界は短いクロスフェード
     fade_frames = max(1e-3, cfg.voicing_fade_ms / 1000.0 / dt)
-    voiced_soft = gaussian_filter1d(usable.astype(float), sigma=fade_frames, mode="nearest")
+    mask = usable if voiced_mask is None else (np.asarray(voiced_mask, dtype=bool)[:n] | usable)
+    voiced_soft = gaussian_filter1d(mask.astype(float), sigma=fade_frames, mode="nearest")
     note_soft = gaussian_filter1d(note_mask, sigma=fade_frames, mode="nearest")
 
     return smooth * voiced_soft * note_soft

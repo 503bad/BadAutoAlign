@@ -60,7 +60,7 @@ def measure_onset_residuals(audio: np.ndarray, guide: GuideData) -> list[float]:
     return residuals
 
 
-@pytest.mark.parametrize("engine", ["stretch", "world"])
+@pytest.mark.parametrize("engine", ["psola", "stretch", "world"])
 @pytest.mark.parametrize("detune", [30.0, -30.0])
 def test_pitch_correction(engine: str, detune: float):
     audio, guide = make_case(detune=detune)
@@ -88,7 +88,7 @@ def test_timing_correction():
     assert any(log["timing_applied"] for log in logs)
 
 
-@pytest.mark.parametrize("engine", ["stretch", "world"])
+@pytest.mark.parametrize("engine", ["psola", "stretch", "world"])
 def test_combined_correction(engine: str):
     audio, guide = make_case(detune=30.0, shift_ms=60.0)
     cfg = Config(detector="pyin", engine=engine, pitch_strength=1.0)

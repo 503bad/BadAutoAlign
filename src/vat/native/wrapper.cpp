@@ -51,6 +51,11 @@ VS_EXPORT void vs_set_formant_factor(void *p, float multiplier, int compensate) 
     static_cast<Stretch *>(p)->setFormantFactor(multiplier, compensate != 0);
 }
 
+// フォルマント包絡推定の基準F0（Hz）。0で内部の自動推定に任せる
+VS_EXPORT void vs_set_formant_base(void *p, float base_freq) {
+    static_cast<Stretch *>(p)->setFormantBase(base_freq);
+}
+
 VS_EXPORT void vs_process(void *p, const float *in, int in_samples,
                 float *out, int out_samples) {
     const float *ins[1] = {in};

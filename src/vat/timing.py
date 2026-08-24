@@ -36,6 +36,31 @@ class WarpMap:
         return np.interp(t_dst, self.dst, self.src)
 
 
+def warp_frame_index(track: PitchTrack, warp: WarpMap) -> np.ndarray:
+    """ワープ後グリッドの各フレームが参照するワープ前フレーム番号。"""
+    n = track.n_frames
+    dt = float(track.times[1] - track.times[0])
+    src_t = warp.dst_to_src(track.times)
+    return np.clip(np.round(src_t / dt).astype(int), 0, n - 1)
+
+
+def warp_track(track: PitchTrack, warp: WarpMap) -> PitchTrack:
+    """ワープ後の時間軸に載せ替えた検出結果（F0値は不変、時刻のみ写像）。
+
+    ピッチ同期エンジンはワープでF0を変えないため、ワープ後の再検出と
+    等価な結果を写像だけで得られる（1パス統合用）。
+    """
+    if track.n_frames < 2:
+        return track
+    idx = warp_frame_index(track, warp)
+    return PitchTrack(
+        times=track.times.copy(), f0=track.f0[idx], voiced=track.voiced[idx],
+        conf=track.conf[idx],
+        f0_raw=None if track.f0_raw is None else track.f0_raw[idx],
+        voiced_raw=None if track.voiced_raw is None else track.voiced_raw[idx],
+    )
+
+
 def detect_voicing_onsets(track: PitchTrack, cfg: Config) -> list[float]:
     """有声化開始点（母音頭）。評価・デバッグ用の簡易オンセット。"""
     dt = float(track.times[1] - track.times[0]) if track.n_frames > 1 else 0.01
@@ -193,6 +218,12 @@ def build_warp_map(
 
     anchors = [(0.0, 0.0)] + sorted(auto) + [(phrase_len_s, phrase_len_s)]
     warp = _sanitize_anchors(anchors, reports, cfg)
+    coarse = warp  # レポート・ラグプロファイル用（再配分前の折れ点列）
+
+    # 伸縮の再配分: アンカー対応は保ったまま、区間内のレート配分を
+    # 無音 > 母音持続 >> 子音 > アタック の重みで解き直す（音質改善 Phase 1）
+    if cfg.elastic_warp and not warp.is_identity():
+        warp = _elastic_redistribute(warp, audio, sr, track, syllables, cfg)
 
     # ---- レポート用: 実際に適用された移動量と、まだ残っているズレ ----
     def applied_at(t_local: float) -> float:
@@ -220,9 +251,9 @@ def build_warp_map(
         "measured_t_s": [round(phrase_start + float(t), 3) for t in ts_m],
         "measured_ms": [round(float(s) * 1000.0, 1) for s in ss_m],
         "measured_from_xcorr": bool(used_xcorr),
-        "applied_t_s": [round(phrase_start + float(t), 3) for t in warp.src],
+        "applied_t_s": [round(phrase_start + float(t), 3) for t in coarse.src],
         "applied_ms": [round(float(d - s) * 1000.0, 1)
-                       for s, d in zip(warp.src, warp.dst)],
+                       for s, d in zip(coarse.src, coarse.dst)],
     }
     return warp, table, base_ms, lag_profile
 
@@ -501,6 +532,108 @@ def _guide_note_feats(notes: list[Note], cfg: Config,
         seg = feats[s:e][m] if m.any() else feats[s:e]
         out.append(seg.mean(axis=0))
     return out
+
+
+def _elastic_redistribute(warp: WarpMap, audio: np.ndarray, sr: int,
+                          track: PitchTrack, syllables, cfg: Config,
+                          grid_step: float = 0.01) -> WarpMap:
+    """区分線形ワープのレート配分を知覚重みで解き直す（05_改修方針 §1.1）。
+
+    アンカー（折れ点）の対応は厳密に保ったまま、各アンカー区間内の伸縮を
+    無音(重み1.0) > 母音持続(0.5) >> 子音(0.05) > アタック(0.02) の順で
+    吸収させる。子音・アタック上のレートは 1.0 近傍に保たれ、
+    トランジェント滲みとレート急変によるざらつき（バリバリ音）を避ける。
+    出力は10msグリッドの細かい折れ点列で、レート遷移は重みの平滑化により
+    なだらかになる。
+    """
+    total = float(warp.src[-1] - warp.src[0])
+    if total < 4 * grid_step:
+        return warp
+    # グリッド: 一様格子 ∪ アンカー位置（区間積分をアンカーで正確に区切る）
+    t = np.unique(np.concatenate(
+        [np.arange(warp.src[0], warp.src[-1], grid_step), warp.src]))
+    dts = np.diff(t)
+    ok = dts > 1e-6
+    t = np.concatenate([t[:1], t[1:][ok]])
+    dts = np.diff(t)
+    centers = (t[:-1] + t[1:]) / 2
+
+    w, lo, hi = _elastic_profile(centers, audio, sr, track, syllables, cfg,
+                                 grid_step)
+
+    rate = np.ones(len(dts))
+    for k in range(len(warp.src) - 1):
+        s0, s1 = float(warp.src[k]), float(warp.src[k + 1])
+        d0, d1 = float(warp.dst[k]), float(warp.dst[k + 1])
+        m = (centers > s0) & (centers < s1)
+        if not m.any():
+            continue
+        rate[m] = _solve_rates(dts[m], w[m], lo[m], hi[m], d1 - d0)
+
+    dst = float(warp.dst[0]) + np.concatenate([[0.0], np.cumsum(rate * dts)])
+    # 数値誤差の吸収: アンカー位置の到達値を厳密に合わせる（区間内で線形補正）
+    anchor_dst = np.interp(warp.src, t, dst)
+    dst += np.interp(t, warp.src, warp.dst - anchor_dst)
+    return WarpMap(src=t, dst=dst)
+
+
+def _elastic_profile(centers: np.ndarray, audio: np.ndarray, sr: int,
+                     track: PitchTrack, syllables, cfg: Config,
+                     grid_step: float,
+                     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """グリッドセルごとの伸縮許容重みとレート上下限。"""
+    # 短窓RMS（±10ms）による無音判定
+    e = np.concatenate([[0.0], np.cumsum(audio.astype(np.float64) ** 2)])
+    half = max(1, int(0.01 * sr))
+    i = np.clip((centers * sr).astype(int), 0, len(audio))
+    a = np.clip(i - half, 0, len(audio))
+    b = np.clip(i + half, 0, len(audio))
+    rms = np.sqrt((e[b] - e[a]) / np.maximum(b - a, 1))
+    silent = 20.0 * np.log10(rms + 1e-12) < cfg.silence_thresh_db
+
+    voiced = np.interp(centers, track.times,
+                       track.voiced.astype(float)) > 0.5
+
+    w = np.where(silent, 1.0, np.where(voiced, 0.5, 0.05))
+    lo = np.where(silent, 0.25, np.where(voiced, 1.0 / 1.5, 0.9))
+    hi = np.where(silent, 4.0, np.where(voiced, 1.5, 1.1))
+
+    # アタック保護: 音節頭 −20ms〜+40ms はほぼ伸縮させない
+    for syl in syllables:
+        m = (centers >= syl.onset - 0.02) & (centers <= syl.onset + 0.04)
+        w[m] = np.minimum(w[m], 0.02)
+        lo[m] = np.maximum(lo[m], 0.95)
+        hi[m] = np.minimum(hi[m], 1.05)
+
+    # 重みを平滑化してレート遷移をなだらかに（折れ点由来のざらつき防止）
+    from scipy.ndimage import gaussian_filter1d
+
+    w = gaussian_filter1d(w, sigma=max(1e-3, 0.03 / grid_step), mode="nearest")
+    return np.maximum(w, 1e-3), lo, hi
+
+
+def _solve_rates(dts: np.ndarray, w: np.ndarray, lo: np.ndarray,
+                 hi: np.ndarray, target_dur: float) -> np.ndarray:
+    """Σ rate·dt = target_dur を満たすレート列を、重みに比例した配分と
+    上下限キャップの反復で解く。不足分が残る場合は一様配分で吸収する
+    （上下限より到達精度を優先。旧・線形配分と同等以上の品質は保たれる）。"""
+    r = np.ones(len(dts))
+    free = np.ones(len(dts), dtype=bool)
+    for _ in range(8):
+        deficit = target_dur - float(np.sum(r * dts))
+        if abs(deficit) < 1e-7:
+            break
+        denom = float(np.sum(w[free] * dts[free]))
+        if denom <= 0:
+            break
+        r[free] += deficit * w[free] / denom
+        clipped = np.clip(r, lo, hi)
+        free = free & (np.abs(r - clipped) < 1e-12)
+        r = clipped
+    deficit = target_dur - float(np.sum(r * dts))
+    if abs(deficit) > 1e-7:
+        r += deficit / float(np.sum(dts))
+    return np.maximum(r, 0.05)
 
 
 def _sanitize_anchors(anchors: list[tuple[float, float]],

@@ -5,6 +5,9 @@
   可変レートワープと時間変化ピッチシフトの両方をこれ一つで行う。
 - WorldEngine: F0/スペクトル包絡/非周期性に分解して再合成（修正BSD）。
   A/B比較用フォールバック。
+- PsolaEngine（既定）: ピッチ同期グレイン再合成（TD-PSOLA、vat.psola）。
+  ワープとピッチシフトを1パスで適用し、有声部は周期波形をそのまま
+  並べ替えるため位相ボコーダ特有のにじみ・ビリビリが出ない。純Python。
 
 librosa.effects.pitch_shift と単純リサンプリングは使用禁止（仕様）。
 """
@@ -19,6 +22,8 @@ from .timing import WarpMap
 
 
 def get_engine(cfg: Config) -> "BaseEngine":
+    if cfg.engine == "psola":
+        return PsolaEngine(cfg)
     if cfg.engine == "stretch":
         from . import native
 
@@ -34,8 +39,16 @@ def get_engine(cfg: Config) -> "BaseEngine":
 
 
 class BaseEngine:
+    # True のエンジンは process() でワープ＋ピッチを同時に適用できる
+    single_pass = False
+
     def __init__(self, cfg: Config):
         self.cfg = cfg
+
+    def process(self, audio: np.ndarray, sr: int, track: PitchTrack,
+                warp: WarpMap | None, curve_semitones: np.ndarray | None) -> np.ndarray:
+        """ワープと補正カーブ（ワープ後時間軸のフレームごと半音）を1パスで適用。"""
+        raise NotImplementedError
 
     def pitch_shift(self, audio: np.ndarray, sr: int, track: PitchTrack,
                     curve_semitones: np.ndarray) -> np.ndarray:
@@ -58,12 +71,26 @@ class SignalsmithEngine(BaseEngine):
     時間変化するピッチシフトと可変レートワープの両方をこれで行う。
     """
 
-    def pitch_shift(self, audio, sr, track, curve_semitones):
+    def _new_stream(self, sr: int, track: PitchTrack | None):
         from .native import StretchStream
 
-        hop = self.cfg.hop
         s = StretchStream(float(sr))
+        if self.cfg.formant_preserve:
+            # 包絡を固定してシフト（声質保持）。基準F0で包絡推定を安定させる
+            s.set_formant_factor(1.0, compensate=True)
+            if track is not None and track.voiced.any():
+                s.set_formant_base(float(np.median(track.f0[track.voiced])))
+        return s
+
+    def _tonality(self, sr: int) -> float:
+        hz = self.cfg.tonality_limit_hz
+        return hz / sr if hz > 0 else 0.0
+
+    def pitch_shift(self, audio, sr, track, curve_semitones):
+        hop = self.cfg.hop
+        s = self._new_stream(sr, track)
         latency = s.input_latency + s.output_latency
+        tonality = self._tonality(sr)
         x = audio.astype(np.float32)
         n = len(audio)
         chunks = []
@@ -71,7 +98,7 @@ class SignalsmithEngine(BaseEngine):
         for pos in range(0, n, hop):
             chunk = x[pos: pos + hop]
             semi = float(curve_semitones[min(frame, len(curve_semitones) - 1)])
-            s.set_transpose_factor(2.0 ** (semi / 12.0))
+            s.set_transpose_factor(2.0 ** (semi / 12.0), tonality)
             chunks.append(s.process(chunk, len(chunk)))
             frame += 1
         chunks.append(s.process(np.zeros(s.input_latency, dtype=np.float32),
@@ -81,35 +108,83 @@ class SignalsmithEngine(BaseEngine):
         return _fix_length(out[latency:], n)
 
     def time_warp(self, audio, sr, warp):
-        from .native import StretchStream
-
-        s = StretchStream(float(sr))
+        s = self._new_stream(sr, None)
         latency = s.input_latency + s.output_latency
         x = audio.astype(np.float32)
         n = len(audio)
-        src_pts = (warp.src * sr).round().astype(int)
-        dst_pts = (warp.dst * sr).round().astype(int)
-        src_pts[-1], dst_pts[-1] = n, n  # 両端固定（丸め誤差の吸収）
+        # 出力サンプル数はフレーズ全体の累積写像から決める。区間ごとの
+        # 丸めリセットを無くし、入力を欠落なく順番どおり送る（レートは
+        # チャンク粒度で warp のレートカーブに追従する）
+        src_s = warp.src * sr
+        dst_s = warp.dst * sr
+        chunk = 512
         chunks = []
-        max_chunk = 2048
-        for k in range(len(src_pts) - 1):
-            ls = src_pts[k + 1] - src_pts[k]
-            ld = dst_pts[k + 1] - dst_pts[k]
-            if ls <= 0 or ld <= 0:
-                continue
-            fed = emitted = 0
-            while fed < ls:
-                m = min(max_chunk, ls - fed)
-                want = int(round((fed + m) * ld / ls)) - emitted
-                chunk = x[src_pts[k] + fed: src_pts[k] + fed + m]
-                chunks.append(s.process(chunk, max(want, 0)))
-                fed += m
-                emitted += max(want, 0)
+        emitted = 0
+        for pos in range(0, n, chunk):
+            end = min(pos + chunk, n)
+            target = float(np.interp(end, src_s, dst_s))
+            want = max(int(round(target)) - emitted, 0)
+            chunks.append(s.process(x[pos:end], want))
+            emitted += want
         chunks.append(s.process(np.zeros(s.input_latency, dtype=np.float32),
                                 s.input_latency))
         chunks.append(s.flush(s.output_latency))
         out = np.concatenate(chunks)
         return _fix_length(out[latency:], n)
+
+
+# ---------------------------------------------------------------- PSOLA
+
+class PsolaEngine(BaseEngine):
+    """ピッチ同期グレイン再合成（vat.psola）。
+
+    検出結果（PitchTrack）から合成用の周期解析を行い、ワープマップと
+    補正カーブを1パスで適用する。無変更区間は入力と一致する。
+    """
+
+    single_pass = True
+
+    def synthesis_voicing(self, audio, sr, track) -> np.ndarray:
+        """合成側の有声判定（周期性ベース）。補正カーブの P2 マスクに使う。"""
+        from . import psola
+
+        voiced, _ = psola.synthesis_voicing(audio, sr, track, self.cfg.hop)
+        return voiced
+
+    def process(self, audio, sr, track, warp, curve_semitones):
+        from . import psola
+
+        n = len(audio)
+        runs, noise = psola.analyze(audio, sr, track, self.cfg.hop)
+        if warp is None or warp.is_identity():
+            src = np.array([0.0, float(n)])
+            dst = np.array([0.0, float(n)])
+        else:
+            src = np.asarray(warp.src, dtype=np.float64) * sr
+            dst = np.asarray(warp.dst, dtype=np.float64) * sr
+            src[0], dst[0] = 0.0, 0.0
+            src[-1], dst[-1] = float(n), float(n)
+        factor_at = None
+        if curve_semitones is not None and np.any(curve_semitones != 0):
+            dt_s = self.cfg.hop  # カーブはワープ後時間軸の解析グリッド（hop間隔）
+            t_grid = np.arange(len(curve_semitones)) * dt_s
+            fac = 2.0 ** (np.asarray(curve_semitones, dtype=np.float64) / 12.0)
+
+            def factor_at(t_out: float) -> float:
+                return float(np.interp(t_out, t_grid, fac))
+        y = psola.render(audio, sr, runs, src, dst, factor_at=factor_at, n_out=n,
+                         noise_frames=noise, hop=self.cfg.hop)
+        return _fix_length(y, n)
+
+    def pitch_shift(self, audio, sr, track, curve_semitones):
+        return self.process(audio, sr, track, None, curve_semitones)
+
+    def time_warp(self, audio, sr, warp, track: PitchTrack | None = None):
+        if track is None:
+            from .detect import detect_pitch
+
+            track = detect_pitch(audio, sr, self.cfg)
+        return self.process(audio, sr, track, warp, None)
 
 
 # ---------------------------------------------------------------- WORLD

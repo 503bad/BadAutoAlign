@@ -10,7 +10,8 @@ uv sync            # Python 3.12 venv作成＋依存インストール
 uv run vat --help
 ```
 
-初回実行時に Signalsmith Stretch のC++ラッパーを自動ビルドします
+既定エンジン（psola）は純Python/NumPyで追加ビルド不要です。
+`--engine stretch` 指定時のみ、初回実行時に Signalsmith Stretch のC++ラッパーを自動ビルドします
 （システムのC++コンパイラが必要。macOSはXcode Command Line Toolsで可。
 Windowsは g++/clang++（MSYS2, w64devkit等）のほか、Visual Studio /
 Build Tools がインストールされていれば vswhere 経由で自動検出します）。
@@ -21,7 +22,7 @@ Build Tools がインストールされていれば vswhere 経由で自動検�
 
 ```bash
 uv run vat process input.wav guide.mid -o output.wav \
-  [--engine stretch|world] \
+  [--engine psola|stretch|world] \
   [--detector auto|rmvpe|crepe|pyin] \
   [--pitch-strength 0.85] \
   [--timing-strength 1.0] \
@@ -47,7 +48,7 @@ uv run vat process input.wav guide.wav -o output.wav --pitch-target note|curve
 
 | 仕様 | 実装 |
 |---|---|
-| P1 シフトエンジン | `vat/native/` — Signalsmith Stretch を自作C ABIラッパー＋ctypesでストリーミング利用。比較用に WORLD (`--engine world`) |
+| P1 シフトエンジン | 既定は `vat/psola.py` — ピッチ同期グレイン再合成（TD-PSOLA、Melodyne 系の周期単位ローカル再合成）。ワープとピッチシフトを1パスで適用し、有声部の倍音位相・フォルマントをそのまま保つ。代替: Signalsmith Stretch (`--engine stretch`、`vat/native/`)、WORLD (`--engine world`) |
 | P2 無声音素通し | pyin信頼度＋RMS＋ZCRで有声判定、無声はシフト比1.0、境界10msクロスフェード |
 | P3 スナップしない補正 | ノートごとに検出F0中央値とのオフセットのみ補正、σ=40msガウシアン平滑、先頭80msランプイン、`--pitch-strength` |
 | P4 検出器 | rmvpe(ONNX) / torchcrepe / pyin 切替式 |

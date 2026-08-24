@@ -37,7 +37,7 @@ def test_cli_process(tmp_path):
     assert sr == SR and len(out) > 0
 
     rep = json.loads(report.read_text(encoding="utf-8"))
-    assert rep["config"]["engine"] == "stretch"
+    assert rep["config"]["engine"] == "psola"
     assert len(rep["notes"]) == len(NOTES)
     for n in rep["notes"]:
         assert "offset_cents_before" in n and "skip_reasons" in n

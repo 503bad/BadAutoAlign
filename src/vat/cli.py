@@ -23,7 +23,9 @@ def build_parser() -> argparse.ArgumentParser:
     proc.add_argument("guide", help="ガイド（.mid/.midi または .wav）")
     proc.add_argument("-o", "--output", required=True, help="出力WAVパス")
 
-    proc.add_argument("--engine", choices=["stretch", "world"], default="stretch")
+    proc.add_argument("--engine", choices=["psola", "stretch", "world"], default="psola",
+                      help="合成エンジン: psola=ピッチ同期グレイン再合成（既定・高品質）, "
+                           "stretch=Signalsmith Stretch, world=WORLDボコーダ")
     proc.add_argument("--detector", choices=["auto", "rmvpe", "crepe", "pyin"],
                       default="auto")
     proc.add_argument("--rmvpe-model", default=None,
@@ -40,6 +42,13 @@ def build_parser() -> argparse.ArgumentParser:
                       help="フレーズ区切りとみなす最小無音長")
     proc.add_argument("--attack-preserve-ms", type=float, default=80.0,
                       help="ノート先頭の補正ランプイン（しゃくり保持）")
+
+    proc.add_argument("--no-formant-preserve", action="store_true",
+                      help="フォルマント保持を無効化（旧動作）")
+    proc.add_argument("--tonality-limit-hz", type=float, default=8000.0,
+                      help="非調和高域を1:1に保つコーナー周波数。0で無効")
+    proc.add_argument("--no-elastic-warp", action="store_true",
+                      help="タイミング補正の伸縮再配分を無効化（旧動作）")
 
     proc.add_argument("--report", default=None, help="レポートJSONの出力先")
 
@@ -66,6 +75,9 @@ def config_from_args(args: argparse.Namespace) -> Config:
         silence_thresh_db=args.silence_thresh_db,
         min_gap_ms=args.min_gap_ms,
         attack_preserve_ms=args.attack_preserve_ms,
+        formant_preserve=not args.no_formant_preserve,
+        tonality_limit_hz=args.tonality_limit_hz,
+        elastic_warp=not args.no_elastic_warp,
         pitch_only=args.pitch_only,
         timing_only=args.timing_only,
         guide_type=args.guide_type,
