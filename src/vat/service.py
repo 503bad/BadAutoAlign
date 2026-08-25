@@ -12,6 +12,9 @@
   process : {"input": wav, "guide": wav|mid, "output": wav,
              "options": {Configフィールドの部分集合}}
             → レポートdict（フレーズ・alignment表・ノートごとのアンカー時刻を含む）
+  guide_notes : {"guide": wav|mid}
+            → {"source": "midi"|"wav", "duration_s": float,
+               "notes": [{"start_s", "end_s", "midi"}]}（GUI のノート表示用）
 """
 
 from __future__ import annotations
@@ -73,7 +76,22 @@ def _dispatch(method: str | None, params: dict):
         return {"version": __version__}
     if method == "process":
         return _process(params)
+    if method == "guide_notes":
+        return _guide_notes(params)
     raise ValueError(f"未知のメソッド: {method}")
+
+
+def _guide_notes(params: dict) -> dict:
+    from .config import Config
+    from .guide import load_guide
+
+    if not params.get("guide"):
+        raise ValueError("パラメータ guide は必須です")
+    guide = load_guide(params["guide"], Config())
+    notes = [{"start_s": round(n.start, 4), "end_s": round(n.end, 4),
+              "midi": round(n.pitch, 2)} for n in guide.notes]
+    duration = max((n.end for n in guide.notes), default=0.0)
+    return {"source": guide.source, "duration_s": round(duration, 4), "notes": notes}
 
 
 def _process(params: dict) -> dict:

@@ -106,6 +106,52 @@ const backend = new VatBackend();
 
 ipcMain.handle("vat:version", () => backend.call("version", {}));
 
+// ガイドのノート列（MIDIガイドのレーン表示用）
+ipcMain.handle("vat:guideNotes", (_ev, guidePath) =>
+  backend.call("guide_notes", { guide: guidePath }));
+
+// ---------------------------------------------------------------- settings
+
+const SETTINGS_PATH = () => path.join(app.getPath("userData"), "settings.json");
+
+async function loadSettings() {
+  try {
+    return JSON.parse(await fs.readFile(SETTINGS_PATH(), "utf-8"));
+  } catch {
+    return {};
+  }
+}
+
+async function saveSettings(patch) {
+  const cur = await loadSettings();
+  const next = { ...cur, ...patch };
+  await fs.mkdir(path.dirname(SETTINGS_PATH()), { recursive: true });
+  await fs.writeFile(SETTINGS_PATH(), JSON.stringify(next, null, 2), "utf-8");
+  return next;
+}
+
+// MIDIガイドのβ版告知（「次回から表示しない」を settings.json に保存）
+ipcMain.handle("ui:midiBetaNotice", async (ev) => {
+  const settings = await loadSettings();
+  if (settings.midiBetaNoticeDismissed) return { shown: false };
+  const win = BrowserWindow.fromWebContents(ev.sender);
+  const { checkboxChecked } = await dialog.showMessageBox(win, {
+    type: "info",
+    title: "MIDIガイド（ベータ版）",
+    message: "MIDIでのガイドはベータ版です",
+    detail:
+      "MIDIにはガイド音声が無いため、タイミング補正はノートの先頭を「芯」とみなし、" +
+      "ボーカル側の芯検出のみで位置を合わせます（WAVガイドで使う包絡相関による" +
+      "密なラグ推定は行われません）。\n" +
+      "ピッチ補正はWAVガイドと同じ挙動です。結果は必ず試聴して確認してください。",
+    buttons: ["OK"],
+    checkboxLabel: "次回から表示しない",
+    checkboxChecked: false,
+  });
+  if (checkboxChecked) await saveSettings({ midiBetaNoticeDismissed: true });
+  return { shown: true };
+});
+
 ipcMain.handle("vat:process", async (ev, params) => {
   if (!params.output) {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "vat-"));

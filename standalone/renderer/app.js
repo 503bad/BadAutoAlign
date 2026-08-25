@@ -23,7 +23,21 @@ const COLORS = {
 const audioCtx = new AudioContext();
 
 // track name -> {path, buffer, pyramid, gain}
+//   MIDIガイド（β）: {path, buffer: null, midi: {notes, duration}, gain}
 const tracks = { guide: null, vocal: null, corrected: null, inst: null };
+
+const MIDI_RE = /\.midi?$/i;
+
+function trackDuration(t) {
+  if (!t) return 0;
+  if (t.buffer) return t.buffer.duration;
+  if (t.midi) return t.midi.duration;
+  return 0;
+}
+
+function isLoaded(t) {
+  return !!(t && (t.buffer || t.midi));
+}
 
 let reportNotes = [];        // 直近レポートのnotes
 let markers = [];            // 表示用 {index, srcS, dstS, state, residualMs, appliedMs}
@@ -43,9 +57,7 @@ function laneOf(name) {
 
 function maxDuration() {
   let d = 0;
-  for (const t of Object.values(tracks)) {
-    if (t && t.buffer) d = Math.max(d, t.buffer.duration);
-  }
+  for (const t of Object.values(tracks)) d = Math.max(d, trackDuration(t));
   return d;
 }
 
@@ -192,7 +204,9 @@ function drawLane(name) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
 
-  if (t && t.pyramid) {
+  if (t && t.midi) {
+    drawMidiNotes(ctx, t.midi, w, h);
+  } else if (t && t.pyramid) {
     ctx.fillStyle = name === "corrected" ? "#7bd0a0" : "#9db8d8";
     const mid = h / 2;
     for (let x = 0; x < w; x++) {
@@ -241,6 +255,26 @@ function drawLane(name) {
     ctx.lineTo(px, h);
     ctx.stroke();
   }
+}
+
+// MIDIガイドのノートをピアノロール風に描く（音高は表示範囲に正規化）
+function drawMidiNotes(ctx, midi, w, h) {
+  const notes = midi.notes;
+  if (!notes.length) return;
+  const lo = midi.minMidi - 1, hi = midi.maxMidi + 1;
+  const rowH = Math.max(3, h / (hi - lo + 1));
+  const tEnd = view.scrollT + w / view.pps;
+  ctx.fillStyle = "#9db8d8";
+  for (const n of notes) {
+    if (n.end_s < view.scrollT || n.start_s > tEnd) continue;
+    const x0 = (n.start_s - view.scrollT) * view.pps;
+    const x1 = (n.end_s - view.scrollT) * view.pps;
+    const y = h - (n.midi - lo + 0.5) * (h / (hi - lo + 1)) - rowH / 2;
+    ctx.fillRect(x0, y, Math.max(1, x1 - x0 - 1), rowH);
+  }
+  ctx.fillStyle = "#e6b455";
+  ctx.font = "10px sans-serif";
+  ctx.fillText("MIDI（β）", 4, 11);
 }
 
 // 分:秒:1/100秒（左が分）
@@ -387,12 +421,52 @@ function setupDrop(name) {
 
 async function loadTrack(name, path) {
   status(`読み込み中: ${path}`);
+  if (MIDI_RE.test(path)) {
+    if (name !== "guide") {
+      status("MIDIはガイドボーカルのレーンにだけドロップできます");
+      return;
+    }
+    await loadMidiGuide(path);
+    return;
+  }
   const buf = await window.api.readFile(path);
   const audio = await audioCtx.decodeAudioData(buf);
   const gain = tracks[name]?.gain || audioCtx.createGain();
   gain.connect(audioCtx.destination);
   tracks[name] = { path, buffer: audio, pyramid: buildPyramid(audio), gain };
   applyGain(name);
+  finishLoad(name, path);
+}
+
+// MIDIガイド（β）: バックエンドでノート列に変換してレーンに表示する。音は出ない
+async function loadMidiGuide(path) {
+  await window.api.midiBetaNotice();
+  let res;
+  try {
+    res = await window.api.guideNotes(path);
+  } catch (err) {
+    status(`MIDI読み込みエラー: ${err.message}`);
+    return;
+  }
+  if (!res.notes.length) {
+    status("MIDIにノートがありません（ドラムトラックは無視されます）");
+    return;
+  }
+  const gain = tracks.guide?.gain || audioCtx.createGain();
+  const pitches = res.notes.map((n) => n.midi);
+  tracks.guide = {
+    path, buffer: null, gain,
+    midi: {
+      notes: res.notes,
+      duration: res.duration_s,
+      minMidi: Math.min(...pitches),
+      maxMidi: Math.max(...pitches),
+    },
+  };
+  finishLoad("guide", path);
+}
+
+function finishLoad(name, path) {
   const lane = laneOf(name);
   lane.querySelector(".lane-body").classList.add("has-audio");
   lane.querySelector(".lane-file").textContent = path;
@@ -421,7 +495,7 @@ function closeTrack(name) {
     manualAnchors.clear();
     buildMarkers();
   }
-  if (!Object.values(tracks).some((x) => x && x.buffer)) {
+  if (!Object.values(tracks).some(isLoaded)) {
     view.pps = 0;
     view.scrollT = 0;
     playhead = 0;
@@ -432,7 +506,7 @@ function closeTrack(name) {
 }
 
 function closeAll() {
-  const any = Object.values(tracks).some((t) => t && t.buffer);
+  const any = Object.values(tracks).some(isLoaded);
   if (!any) return;
   for (const name of Object.keys(tracks)) closeTrack(name);
   status("全トラックを閉じました");
@@ -445,8 +519,9 @@ function updateButtons() {
   for (const id of ["#btn-timing", "#btn-pitch", "#btn-both"]) {
     $(id).disabled = !ready;
   }
-  const anyLoaded = Object.values(tracks).some((t) => t && t.buffer);
-  $("#btn-play").disabled = !anyLoaded;
+  const anyLoaded = Object.values(tracks).some(isLoaded);
+  const anyAudio = Object.values(tracks).some((t) => t && t.buffer);
+  $("#btn-play").disabled = !anyAudio;
   $("#btn-close-all").disabled = !anyLoaded;
   $("#btn-recorrect").disabled = manualAnchors.size === 0 || !ready;
   $("#btn-save").disabled = !tracks.corrected;

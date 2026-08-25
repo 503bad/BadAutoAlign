@@ -41,6 +41,9 @@ uv run vat process input.wav guide.wav -o output.wav --pitch-target note|curve
   - rmvpe: `--rmvpe-model model.onnx` でONNXモデルの指定が必要（onnxruntime導入時のみ）
   - crepe: `uv sync --extra crepe` でtorch/torchcrepeを導入した場合のみ
   - pyin: 追加依存なしで常に利用可（librosa）
+- MIDIガイド（β）: `.mid/.midi` を渡すとノート列をガイドにする。ガイド音声が無いため
+  タイミング補正はノートオンを芯とみなし、ボーカル側の芯（P-center）検出のみで合わせる
+  （WAVガイドの包絡相互相関による密なラグ推定は使われない）。ピッチ補正はWAVガイドと同じ
 - `--report`: ノートごとの補正前後F0・移動量・スキップ理由をJSON出力。
   matplotlib導入時は処理前後のスペクトログラム比較PNGも出力
 

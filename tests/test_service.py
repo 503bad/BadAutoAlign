@@ -64,3 +64,19 @@ def test_process_returns_report(tmp_path):
     assert report["notes"], "レポートにノートが無い"
     # stdoutがプロトコル専用であること（処理ログが混ざるとJSONにならない）は
     # _talk のパースが通った時点で保証される
+
+
+def test_guide_notes_midi(tmp_path):
+    """MIDIガイドのノート列取得（GUIのレーン表示用）。"""
+    from synth import write_midi
+
+    notes = [SynthNote(0.50, 0.50, 60), SynthNote(1.16, 0.50, 64)]
+    midi = tmp_path / "guide.mid"
+    write_midi(notes, str(midi))
+    (resp,) = _talk([{"id": 3, "method": "guide_notes", "params": {"guide": str(midi)}}])
+    assert resp["ok"], resp
+    res = resp["result"]
+    assert res["source"] == "midi"
+    assert [n["midi"] for n in res["notes"]] == [60, 64]
+    assert abs(res["notes"][0]["start_s"] - 0.5) < 1e-3
+    assert abs(res["duration_s"] - 1.66) < 1e-3

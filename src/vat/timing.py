@@ -115,6 +115,8 @@ def build_warp_map(
 
     # P-center（芯）: ガイド音声がある場合は両側対称に芯を検出してアンカーにする。
     # 片側だけ有声化開始点を使うと、しゃくり・ガナリのぶん系統的に後ろへずれる。
+    # MIDI ガイド（音声なし）ではノートオンを芯とみなし、ボーカル側だけ芯を検出する
+    # （MIDI ノートにはしゃくりも子音もないため）。
     pc = _prepare_pcenter(audio, sr, track, cfg, guide_ctx)
 
     # 第1パス: 全対応ノートのシフトを計測し、信頼できるものを候補にする
@@ -129,7 +131,10 @@ def build_warp_map(
 
         if pc is not None:
             src_t = _vocal_core(pc, syl)
-            dst_t = _guide_core(pc, note) - phrase_start
+            if pc.get("g_env") is not None:
+                dst_t = _guide_core(pc, note) - phrase_start
+            else:
+                dst_t = note.start - phrase_start  # MIDI: ノートオン＝芯
         else:
             src_t = syl.onset
             dst_t = note.start - phrase_start
@@ -277,7 +282,7 @@ def _xcorr_lag_samples(audio: np.ndarray, sr: int, syllables, phrase_start: floa
     ±max_shift の範囲でスライドさせ、相関が最大になるズレを求める。
     ノート単位の芯検出よりはるかにノイズが少なく、レガートでも密に取れる。
     """
-    if guide_ctx is None or pc is None or not syllables:
+    if guide_ctx is None or pc is None or pc.get("g_env") is None or not syllables:
         return None
     dt_v = pc["v_dt"]
     dt_g = pc["g_dt"]
@@ -379,7 +384,8 @@ def _smooth_lag_curve(samples: tuple[np.ndarray, np.ndarray, np.ndarray],
     # 閉ループ検証: 各点で「lagだけ動かすと包絡相関が実際に改善する」ことを
     # 確認し、改善しない点はゼロに落とす。大きなミスマッチ（ガード対象）の
     # 近傍でカーブが汚染され、合っている区間を引きずるのを防ぐ最終防衛線。
-    if pc is not None:
+    # （ガイド包絡がある WAV ガイド時のみ）
+    if pc is not None and pc.get("g_env") is not None:
         lag = _verify_lag_curve(grid, lag, pc, phrase_start)
 
     # 遷移をなだらかに繋ぐ
@@ -457,17 +463,26 @@ def _drop_inconsistent_anchors(cands: list[dict], cfg: Config,
 
 def _prepare_pcenter(audio: np.ndarray, sr: int, track: PitchTrack,
                      cfg: Config, guide_ctx: dict | None) -> dict | None:
-    """芯検出用の包絡・F0コンテキスト（ガイド音声がある場合のみ）。"""
-    if guide_ctx is None:
-        return None
+    """芯検出用の包絡・F0コンテキスト。
+
+    ガイド音声が無い（MIDI ガイド）場合はボーカル側のみ（g_* は None）。
+    ラグの密推定・閉ループ検証はガイド包絡が必要なので WAV ガイド時のみ働く。
+    """
     from .pcenter import midband_envelope
 
-    g_semis = np.nan_to_num(guide_ctx["guide_semis"], nan=0.0)
-    return {
+    vocal = {
         "v_env": midband_envelope(audio, sr, cfg),
         "v_semis": np.nan_to_num(track.semitones(), nan=0.0),
         "v_voiced": track.voiced,
         "v_dt": cfg.hop / sr,
+    }
+    if guide_ctx is None:
+        return {**vocal, "g_env": None, "g_semis": None, "g_voiced": None,
+                "g_dt": None, "g_seg_start": None}
+
+    g_semis = np.nan_to_num(guide_ctx["guide_semis"], nan=0.0)
+    return {
+        **vocal,
         "g_env": midband_envelope(guide_ctx["guide_audio"],
                                   guide_ctx["guide_sr"], cfg),
         "g_semis": g_semis,
