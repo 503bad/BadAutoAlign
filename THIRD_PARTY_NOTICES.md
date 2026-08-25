@@ -1,6 +1,7 @@
 # サードパーティライセンス表記（BadAutoAlign / VocalAlignTune）
 
-本ソフトウェア本体（`src/vat`, `standalone`）は MIT License（© 2026 503 bad gateway）で提供されます。
+本ソフトウェア本体（`src/vat`, `standalone`）は 503 bad gateway のプロプライエタリソフトウェアです
+（© 2026 503 bad gateway、使用条件は同梱の EULA.txt）。
 配布パッケージには以下のサードパーティコンポーネントが含まれます。
 各コンポーネントの著作権は各権利者に帰属し、それぞれのライセンス条件に従います。
 

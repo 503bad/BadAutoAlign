@@ -1,6 +1,6 @@
 # BadAutoAlign — スタンドアローン版
 
-開発: 503 bad gateway ／ ライセンス: MIT（サードパーティ表記は `../THIRD_PARTY_NOTICES.md`）
+開発: 503 bad gateway ／ ライセンス: プロプライエタリ（配布物の使用条件は `../EULA.txt`、サードパーティ表記は `../THIRD_PARTY_NOTICES.md`）
 
 ## ビルド（体験版 / 製品版）
 

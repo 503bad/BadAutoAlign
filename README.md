@@ -79,15 +79,22 @@ uv run pytest tests/ -q
 - ヌルテスト: ずれの無い入力で出力がビット一致することを検証
 - 両エンジン（stretch/world）、max-shiftガード、DTW経路、CLIエンドツーエンドを網羅
 
-## 依存ライセンス
+## ライセンス
+
+本体はプロプライエタリ（© 2026 503 bad gateway、`LICENSE`）。配布バイナリの使用条件は `EULA.txt`。
+
+主な依存（全リストと義務は `THIRD_PARTY_NOTICES.md`）:
 
 | 依存 | ライセンス |
 |---|---|
-| Signalsmith Stretch / signalsmith-linear（ベンダリング） | MIT |
+| Signalsmith Stretch / signalsmith-linear（ベンダリング、`--engine stretch` 時のみ） | MIT |
 | WORLD (pyworld) | 修正BSD |
-| librosa（pYINのみ使用。pitch_shiftは使用禁止） | ISC |
-| pretty_midi | MIT |
-| numpy / scipy / soundfile | BSD系 |
+| librosa（pYIN。pitch_shiftは使用禁止） | ISC |
+| pretty_midi / mido | MIT |
+| numpy / scipy / scikit-learn / numba | BSD系 |
+| soundfile（バインディング） / libsndfile | BSD-3 / **LGPL-2.1+** |
+| soxr（librosa依存） / libsoxr | **LGPL-2.1+** |
 | torchcrepe（optional） | MIT |
 
-コピーレフト・クレジット表示義務のある依存は不使用。
+強いコピーレフト（GPL）は不使用。LGPL の 3 件（libsndfile / libsoxr / Electron 同梱 FFmpeg）は
+改変せず差し替え可能な独立ファイルとして同梱し、全文・表記・ソース入手先を `THIRD_PARTY_NOTICES.md` に記載。

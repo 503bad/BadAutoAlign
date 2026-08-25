@@ -224,8 +224,8 @@ ipcMain.handle("file:read", async (_ev, filePath) => {
 // ---------------------------------------------------------------- menu
 
 const LICENSE_TEXT = `${app.getName()} v${app.getVersion()}（${EDITION_LABEL}）
-© 2026 503 bad gateway
-本アプリ本体は MIT License で提供されます。
+© 2026 503 bad gateway. All rights reserved.
+本アプリ本体はプロプライエタリソフトウェアです。使用条件は同梱の EULA.txt に定めます。
 
 主なサードパーティコンポーネント:
 ・Electron / Node.js — MIT、Chromium — BSD系
@@ -237,13 +237,17 @@ const LICENSE_TEXT = `${app.getName()} v${app.getVersion()}（${EDITION_LABEL}�
 
 全リストと各ライセンス条件は同梱の THIRD_PARTY_NOTICES.md を参照してください。`;
 
-// 同梱の THIRD_PARTY_NOTICES.md（配布時は resources/、開発時はリポジトリルート）
-function noticesPath() {
+// 同梱ファイル（配布時は resources/、開発時はリポジトリルート）
+function bundledPath(name) {
   const cands = [
-    path.join(process.resourcesPath || "", "THIRD_PARTY_NOTICES.md"),
-    path.join(REPO_ROOT, "THIRD_PARTY_NOTICES.md"),
+    path.join(process.resourcesPath || "", name),
+    path.join(REPO_ROOT, name),
   ];
   return cands.find((p) => require("node:fs").existsSync(p)) || null;
+}
+
+function noticesPath() {
+  return bundledPath("THIRD_PARTY_NOTICES.md");
 }
 
 async function showLicense(win) {
@@ -252,10 +256,13 @@ async function showLicense(win) {
     title: "ライセンス表記",
     message: `${app.getName()} のライセンス`,
     detail: LICENSE_TEXT,
-    buttons: ["閉じる", "サードパーティ表記の全文を開く"],
+    buttons: ["閉じる", "使用許諾契約（EULA）を開く", "サードパーティ表記の全文を開く"],
     defaultId: 0,
   });
   if (response === 1) {
+    const p = bundledPath("EULA.txt");
+    if (p) require("electron").shell.openPath(p);
+  } else if (response === 2) {
     const p = noticesPath();
     if (p) require("electron").shell.openPath(p);
   }

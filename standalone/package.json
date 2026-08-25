@@ -7,7 +7,7 @@
     "name": "503 bad gateway"
   },
   "main": "main.js",
-  "license": "MIT",
+  "license": "UNLICENSED",
   "scripts": {
     "start": "electron .",
     "start:trial": "electron . --edition=trial",
@@ -38,8 +38,8 @@
         "to": "vat-serve"
       },
       {
-        "from": "../LICENSE",
-        "to": "LICENSE.txt"
+        "from": "../EULA.txt",
+        "to": "EULA.txt"
       },
       {
         "from": "../THIRD_PARTY_NOTICES.md",
@@ -54,7 +54,8 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "license": "../LICENSE"
+      "license": "../EULA.txt"
     }
-  }
+  },
+  "private": true
 }
