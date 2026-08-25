@@ -1,10 +1,11 @@
 [project]
 name = "vocal-align-tune"
-version = "0.1.0"
+version = "0.5.1"
 description = "VocalAlignTune — MIDI/WAV guided vocal timing & pitch correction (CLI prototype)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
+authors = [{ name = "503 bad gateway" }]
 dependencies = [
     "numpy>=1.26",
     "scipy>=1.11",

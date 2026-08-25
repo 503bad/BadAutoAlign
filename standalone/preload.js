@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 contextBridge.exposeInMainWorld("api", {
   version: () => ipcRenderer.invoke("vat:version"),
+  edition: () => ipcRenderer.invoke("app:edition"),
   process: (params) => ipcRenderer.invoke("vat:process", params),
   guideNotes: (guidePath) => ipcRenderer.invoke("vat:guideNotes", guidePath),
   midiBetaNotice: () => ipcRenderer.invoke("ui:midiBetaNotice"),

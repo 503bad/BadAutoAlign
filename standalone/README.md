@@ -1,6 +1,26 @@
-# BadAutoAlign — スタンドアローン版（開発中）
+# BadAutoAlign — スタンドアローン版
 
-開発: Igarashi Date（503 bad gateway）
+開発: 503 bad gateway ／ ライセンス: MIT（サードパーティ表記は `../THIRD_PARTY_NOTICES.md`）
+
+## ビルド（体験版 / 製品版）
+
+```bash
+# 1. バックエンド（リポジトリルートで）
+uv sync && uv pip install pyinstaller
+uv run python -m PyInstaller build/vat-serve.spec --distpath dist --workpath build/pyi -y
+
+# 2. インストーラ（standalone で）
+npm install
+npm run dist          # 両方: release/full/ と release/trial/
+npm run dist:full     # 製品版のみ  → release/full/BadAutoAlign-<ver>-full-setup.exe
+npm run dist:trial    # 体験版のみ  → release/trial/BadAutoAlign Trial-<ver>-trial-setup.exe
+```
+
+- 体験版は保存ボタンで「体験版につきデータは保存できません。」ダイアログを出し、保存しません。
+  それ以外の機能は製品版と同一
+- エディションは `scripts/dist.js` が package.json の `edition` に焼き込み、`main.js` が参照する。
+  appId / productName を分けているため両版を同一 PC に共存インストール可能
+- 開発時に体験版の挙動を確認するには `npm run start:trial`（`electron . --edition=trial`）
 
 Electron UI + Pythonバックエンド（`vat serve`、stdio上のJSON-RPC）構成。
 UI/UX設計は `docs/soan.md` を参照。

@@ -1,17 +1,19 @@
 {
   "name": "bad-auto-align",
   "productName": "BadAutoAlign",
-  "version": "0.2.0",
+  "version": "0.5.1",
   "description": "MIDI/WAVガイドによるボーカルのタイミング・ピッチ一括補正（スタンドアローン版）",
   "author": {
-    "name": "Igarashi Date"
+    "name": "503 bad gateway"
   },
-  "company": "503 bad gateway",
   "main": "main.js",
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win"
+    "start:trial": "electron . --edition=trial",
+    "dist": "node scripts/dist.js all",
+    "dist:full": "node scripts/dist.js full",
+    "dist:trial": "node scripts/dist.js trial"
   },
   "devDependencies": {
     "electron": "^33.2.0",
@@ -20,19 +22,28 @@
   "build": {
     "appId": "com.badgateway503.badautoalign",
     "productName": "BadAutoAlign",
-    "copyright": "© 2026 Igarashi Date / 503 bad gateway",
+    "copyright": "© 2026 503 bad gateway",
     "directories": {
       "output": "release"
     },
     "files": [
       "main.js",
       "preload.js",
-      "renderer/**"
+      "renderer/**",
+      "package.json"
     ],
     "extraResources": [
       {
         "from": "../dist/vat-serve",
         "to": "vat-serve"
+      },
+      {
+        "from": "../LICENSE",
+        "to": "LICENSE.txt"
+      },
+      {
+        "from": "../THIRD_PARTY_NOTICES.md",
+        "to": "THIRD_PARTY_NOTICES.md"
       }
     ],
     "win": {
@@ -42,7 +53,8 @@
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "license": "../LICENSE"
     }
   }
 }

@@ -5,7 +5,6 @@ __pycache__/
 wav/
 out/
 .pytest_cache/
-build/
+build/pyi/
 dist/
-packaging/
 standalone/release/

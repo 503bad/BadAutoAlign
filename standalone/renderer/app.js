@@ -535,6 +535,7 @@ async function saveCorrected() {
       vocalPath: tracks.vocal ? tracks.vocal.path : null,
     });
     if (res.saved) status(`保存しました: ${res.filePath}`);
+    else if (res.trial) status("体験版のため保存できません（製品版でご利用ください）");
   } catch (err) {
     status(`保存エラー: ${err.message}`);
   }
@@ -944,6 +945,13 @@ window.addEventListener("keydown", (e) => {
   else startPlayback();
 });
 window.addEventListener("resize", drawAll);
+
+window.api.edition().then((ed) => {
+  // ウィンドウタイトルとヘッダにエディションを表示（体験版は保存不可）
+  document.title = `${ed.name} v${ed.version}${ed.trial ? "（体験版）" : ""}`;
+  $("h1").textContent = `${ed.name}${ed.trial ? " 体験版" : ""}`;
+  if (ed.trial) $("#btn-save").title = "体験版では保存できません";
+}).catch(() => {});
 
 window.api.version()
   .then((v) => status(`バックエンド接続OK (vat ${v.version})`))

@@ -13,6 +13,18 @@ const readline = require("node:readline");
 
 const REPO_ROOT = path.resolve(__dirname, "..");
 
+// エディション: "full"（製品版） | "trial"（体験版: 保存不可）
+// 配布時は scripts/dist.js が package.json に "edition" を焼き込む。
+// 開発時は `electron . --edition=trial` または環境変数 VAT_EDITION で切替。
+const EDITION = (() => {
+  const arg = process.argv.find((a) => a.startsWith("--edition="));
+  if (arg) return arg.split("=")[1];
+  if (process.env.VAT_EDITION) return process.env.VAT_EDITION;
+  try { return require("./package.json").edition || "full"; } catch { return "full"; }
+})();
+const IS_TRIAL = EDITION === "trial";
+const EDITION_LABEL = IS_TRIAL ? "体験版" : "製品版";
+
 // ---------------------------------------------------------------- backend
 
 class VatBackend {
@@ -168,8 +180,23 @@ ipcMain.handle("vat:process", async (ev, params) => {
   }
 });
 
-// 補正済み音源を保存ダイアログ経由でコピー保存する
+ipcMain.handle("app:edition", () => ({
+  edition: EDITION, trial: IS_TRIAL, label: EDITION_LABEL,
+  name: app.getName(), version: app.getVersion(),
+}));
+
+// 補正済み音源を保存ダイアログ経由でコピー保存する（体験版は不可）
 ipcMain.handle("file:saveAs", async (ev, { sourcePath, vocalPath }) => {
+  if (IS_TRIAL) {
+    await dialog.showMessageBox(BrowserWindow.fromWebContents(ev.sender), {
+      type: "info",
+      title: "体験版",
+      message: "体験版につきデータは保存できません。",
+      detail: "補正結果の保存は製品版でご利用いただけます。",
+      buttons: ["OK"],
+    });
+    return { saved: false, trial: true };
+  }
   const base = vocalPath
     ? path.basename(vocalPath, path.extname(vocalPath))
     : "vocal";
@@ -196,29 +223,42 @@ ipcMain.handle("file:read", async (_ev, filePath) => {
 
 // ---------------------------------------------------------------- menu
 
-const LICENSE_TEXT = `${app.getName()} v${app.getVersion()}
-© 2026 Igarashi Date / 503 bad gateway
-本アプリは MIT License で提供されます。
+const LICENSE_TEXT = `${app.getName()} v${app.getVersion()}（${EDITION_LABEL}）
+© 2026 503 bad gateway
+本アプリ本体は MIT License で提供されます。
 
-サードパーティライセンス:
-・Signalsmith Stretch / signalsmith-linear — MIT License
-  (c) Geraint Luff / Signalsmith Audio Ltd.
-・WORLD (pyworld) — 修正BSD License
-・librosa — ISC License
-・pretty_midi — MIT License
-・numpy / scipy / soundfile — BSD系 License
-・Electron / Chromium — MIT / BSD License
+主なサードパーティコンポーネント:
+・Electron / Node.js — MIT、Chromium — BSD系
+・Python / NumPy / SciPy / librosa / scikit-learn / numba — PSF / BSD / ISC
+・WORLD (pyworld) — 修正BSD、pretty_midi / mido — MIT
+・Signalsmith Stretch — MIT (c) Geraint Luff / Signalsmith Audio Ltd.
+・libsndfile (python-soundfile)、libsoxr (python-soxr)、FFmpeg (Electron) — LGPL-2.1+
+  （改変せず、差し替え可能な独立ファイルとして同梱）
 
-コピーレフト・クレジット表示義務のある依存は使用していません。`;
+全リストと各ライセンス条件は同梱の THIRD_PARTY_NOTICES.md を参照してください。`;
 
-function showLicense(win) {
-  dialog.showMessageBox(win, {
+// 同梱の THIRD_PARTY_NOTICES.md（配布時は resources/、開発時はリポジトリルート）
+function noticesPath() {
+  const cands = [
+    path.join(process.resourcesPath || "", "THIRD_PARTY_NOTICES.md"),
+    path.join(REPO_ROOT, "THIRD_PARTY_NOTICES.md"),
+  ];
+  return cands.find((p) => require("node:fs").existsSync(p)) || null;
+}
+
+async function showLicense(win) {
+  const { response } = await dialog.showMessageBox(win, {
     type: "info",
     title: "ライセンス表記",
     message: `${app.getName()} のライセンス`,
     detail: LICENSE_TEXT,
-    buttons: ["閉じる"],
+    buttons: ["閉じる", "サードパーティ表記の全文を開く"],
+    defaultId: 0,
   });
+  if (response === 1) {
+    const p = noticesPath();
+    if (p) require("electron").shell.openPath(p);
+  }
 }
 
 function buildMenu() {
@@ -236,9 +276,10 @@ function buildMenu() {
             dialog.showMessageBox(win, {
               type: "info",
               title: `${app.getName()} について`,
-              message: `${app.getName()} v${app.getVersion()}`,
-              detail: "開発: Igarashi Date（503 bad gateway）\n" +
-                "MIDI/WAVガイドによるボーカルのタイミング・ピッチ一括補正",
+              message: `${app.getName()} v${app.getVersion()}（${EDITION_LABEL}）`,
+              detail: "開発: 503 bad gateway\n" +
+                "MIDI/WAVガイドによるボーカルのタイミング・ピッチ一括補正" +
+                (IS_TRIAL ? "\n体験版では補正結果の保存はできません。" : ""),
               buttons: ["閉じる"],
             });
           },
@@ -255,6 +296,7 @@ function createWindow() {
   const win = new BrowserWindow({
     width: 1440,
     height: 900,
+    title: `${app.getName()}${IS_TRIAL ? "（体験版）" : ""}`,
     backgroundColor: "#16181d",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
